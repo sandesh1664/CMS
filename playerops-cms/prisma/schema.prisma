@@ -1,0 +1,216 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum StaffRole {
+  ADMIN
+  STAFF
+}
+
+enum ShiftType {
+  MORNING
+  AFTERNOON_EVENING
+  NIGHT
+}
+
+enum PlayerAccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  CLOSED
+  UNKNOWN
+}
+
+enum ActivitySource {
+  STAFF_VERIFIED
+}
+
+enum CallOutcome {
+  ANSWERED
+  NO_ANSWER
+  REQUESTED_CALLBACK
+  ISSUE_REPORTED
+  CONTACT_DECLINED
+  OTHER
+}
+
+enum FollowUpType {
+  INACTIVITY
+  CALLBACK
+  ISSUE
+  OTHER
+}
+
+enum FollowUpStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Staff {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String?   @db.Text
+  role         StaffRole @default(STAFF)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+
+  assignedPlayers  Player[]          @relation("AssignedPlayers")
+  activities       PlayerActivity[]
+  calls            CallLog[]
+  followUps        FollowUpTask[]
+  shiftAssignments ShiftAssignment[]
+  handoversFrom    ShiftHandover[]   @relation("HandoverAuthor")
+  handoversTo      ShiftHandover[]   @relation("HandoverRecipient")
+}
+
+model Player {
+  id                   String              @id @default(cuid())
+  playerCode           String              @unique
+  fullName             String
+  phone                String?
+  email                String?
+  referredBy           String?
+  referralSource       String?
+  registeredAt         DateTime            @default(now()) @db.Timestamptz(3)
+  accountStatus        PlayerAccountStatus @default(UNKNOWN)
+  assignedStaffId      String?
+  assignedShiftType    ShiftType?
+  lastVerifiedPlayedAt DateTime?           @db.Timestamptz(3)
+  lastContactAt        DateTime?           @db.Timestamptz(3)
+  notes                String?
+  createdAt            DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime            @updatedAt @db.Timestamptz(3)
+
+  assignedStaff    Staff?                  @relation("AssignedPlayers", fields: [assignedStaffId], references: [id], onDelete: SetNull)
+  platformAccounts PlayerPlatformAccount[]
+  activities       PlayerActivity[]
+  calls            CallLog[]
+  followUps        FollowUpTask[]
+
+  @@index([assignedStaffId])
+  @@index([lastVerifiedPlayedAt])
+  @@index([registeredAt])
+  @@index([accountStatus])
+}
+
+model Platform {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  accounts PlayerPlatformAccount[]
+}
+
+model PlayerPlatformAccount {
+  id               String              @id @default(cuid())
+  playerId         String
+  platformId       String
+  username         String
+  externalPlayerId String?
+  status           PlayerAccountStatus @default(UNKNOWN)
+  createdAt        DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime            @updatedAt @db.Timestamptz(3)
+
+  player   Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  platform Platform @relation(fields: [platformId], references: [id], onDelete: Restrict)
+
+  @@unique([platformId, username])
+  @@index([playerId])
+}
+
+model PlayerActivity {
+  id         String         @id @default(cuid())
+  playerId   String
+  staffId    String
+  playedAt   DateTime       @db.Timestamptz(3)
+  recordedAt DateTime       @default(now()) @db.Timestamptz(3)
+  source     ActivitySource @default(STAFF_VERIFIED)
+  notes      String?
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  staff  Staff  @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@index([playerId, playedAt])
+  @@index([staffId, recordedAt])
+}
+
+model ShiftAssignment {
+  id        String    @id @default(cuid())
+  staffId   String
+  shiftDate DateTime  @db.Date
+  shiftType ShiftType
+  startsAt  DateTime  @db.Timestamptz(3)
+  endsAt    DateTime  @db.Timestamptz(3)
+  notes     String?
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([staffId, shiftDate, shiftType])
+  @@index([shiftDate, shiftType])
+}
+
+model CallLog {
+  id             String      @id @default(cuid())
+  playerId       String
+  staffId        String
+  calledAt       DateTime    @default(now()) @db.Timestamptz(3)
+  outcome        CallOutcome
+  notes          String?
+  nextFollowUpAt DateTime?   @db.Timestamptz(3)
+  createdAt      DateTime    @default(now()) @db.Timestamptz(3)
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  staff  Staff  @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@index([playerId, calledAt])
+  @@index([staffId, calledAt])
+  @@index([nextFollowUpAt])
+}
+
+model FollowUpTask {
+  id              String         @id @default(cuid())
+  playerId        String
+  assignedStaffId String?
+  type            FollowUpType   @default(INACTIVITY)
+  status          FollowUpStatus @default(OPEN)
+  dueAt           DateTime       @db.Timestamptz(3)
+  notes           String?
+  createdAt       DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(3)
+  resolvedAt      DateTime?      @db.Timestamptz(3)
+
+  player        Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  assignedStaff Staff? @relation(fields: [assignedStaffId], references: [id], onDelete: SetNull)
+
+  @@index([playerId, type, status])
+  @@index([assignedStaffId, status, dueAt])
+  @@index([status, dueAt])
+}
+
+model ShiftHandover {
+  id               String    @id @default(cuid())
+  shiftDate        DateTime  @db.Date
+  shiftType        ShiftType
+  authorStaffId    String
+  recipientStaffId String?
+  notes            String
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+
+  author    Staff  @relation("HandoverAuthor", fields: [authorStaffId], references: [id], onDelete: Restrict)
+  recipient Staff? @relation("HandoverRecipient", fields: [recipientStaffId], references: [id], onDelete: SetNull)
+
+  @@index([shiftDate, shiftType])
+  @@index([authorStaffId, createdAt])
+}

@@ -1,0 +1,913 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  Activity, ArrowDownToLine, ArrowRight, Bell, CalendarDays,
+  Check, ChevronDown, CircleHelp, Clock3, LayoutDashboard,
+  Menu, Phone, PhoneCall, Search, Settings, ShieldCheck,
+  Users, X, Headphones, BarChart3, UserRound, Building2, Plus
+} from "lucide-react";
+
+type Status =
+  | "Call Received"
+  | "Call Not Received"
+  | "Not Interested"
+  | "Follow-up Required"
+  | "Wrong Number"
+  | "Do Not Contact"
+  | "No call logged";
+
+type Player = {
+  id: string;
+  name: string;
+  platform: string;
+  referral: string;
+  staff: string;
+  status: Status;
+  time: string;
+};
+
+const initialPlayers: Player[] = [];
+
+const statuses: Status[] = [
+  "Call Received",
+  "Call Not Received",
+  "Not Interested",
+  "Follow-up Required",
+  "Wrong Number",
+  "Do Not Contact",
+];
+
+const navGroups = [
+  {
+    title: "WORKSPACE",
+    items: [
+      { label: "Overview", icon: LayoutDashboard },
+      { label: "Players", icon: Users },
+      { label: "Call management", icon: Phone },
+      { label: "Follow-ups", icon: CalendarDays },
+      { label: "Call history", icon: Activity },
+    ],
+  },
+  {
+    title: "MANAGEMENT",
+    items: [
+      { label: "Reports", icon: BarChart3 },
+      { label: "Platforms", icon: Building2 },
+      { label: "Referral sources", icon: ArrowRight },
+      { label: "Team & users", icon: UserRound },
+      { label: "Settings", icon: Settings },
+    ],
+  },
+];
+
+const staffNavGroups = [
+  {
+    title: "MY WORKSPACE",
+    items: [
+      { label: "Overview", icon: LayoutDashboard },
+      { label: "Players", icon: Users },
+      { label: "Call management", icon: Phone },
+      { label: "Follow-ups", icon: CalendarDays },
+      { label: "Call history", icon: Activity },
+      { label: "My Profile", icon: UserRound },
+    ],
+  },
+];
+
+function StatusBadge({ status }: { status: Status }) {
+  const cls: Record<Status, string> = {
+    "Call Received": "green",
+    "Call Not Received": "gray",
+    "Not Interested": "red",
+    "Follow-up Required": "amber",
+    "Wrong Number": "purple",
+    "Do Not Contact": "red",
+    "No call logged": "gray",
+  };
+
+  return (
+    <span className={`status-badge ${cls[status]}`}>
+      <span className="status-dot" />
+      {status}
+    </span>
+  );
+}
+
+export default function DashboardClient({ role, staffName }: { role: "Admin" | "Staff"; staffName: string }) {
+  const [players, setPlayers] = useState<Player[]>(initialPlayers);
+  const [playersLoading, setPlayersLoading] = useState(true);
+  const [playersError, setPlayersError] = useState("");
+  const [activePage, setActivePage] = useState("Overview");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPlayers() {
+      try {
+        setPlayersError("");
+
+        const response = await fetch("/api/players", {
+          method: "GET",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
+
+        if (!response.ok) {
+          if (response.status === 401 || response.status === 403) {
+            throw new Error("Your session or staff permissions need attention. Please sign in again.");
+          }
+          throw new Error("Unable to load player records. Please try again.");
+        }
+
+        const data: {
+          players: Array<{
+            id: string;
+            playerCode: string;
+            fullName: string;
+            referralSource: string | null;
+            registeredAt: string;
+            lastContactAt: string | null;
+            assignedStaff: { id: string; name: string } | null;
+            platformAccounts: Array<{
+              id: string;
+              username: string;
+              platform: { id: string; name: string };
+            }>;
+          }>;
+        } = await response.json();
+
+        if (!Array.isArray(data.players)) {
+          throw new Error("The player API returned an unexpected response.");
+        }
+
+        const mapped: Player[] = data.players.map((player) => ({
+          id: player.playerCode,
+          name: player.fullName,
+          platform: player.platformAccounts.map((account) => account.platform.name).join(", ") || "Not assigned",
+          referral: player.referralSource || "Not specified",
+          staff: player.assignedStaff?.name || "Unassigned",
+          status: "No call logged",
+          time: player.lastContactAt
+            ? new Date(player.lastContactAt).toLocaleString([], {
+                dateStyle: "medium",
+                timeStyle: "short",
+              })
+            : "No contact yet",
+        }));
+
+        if (!cancelled) setPlayers(mapped);
+      } catch (error) {
+        if (!cancelled) {
+          setPlayersError(
+            error instanceof Error ? error.message : "Unable to load player records."
+          );
+        }
+      } finally {
+        if (!cancelled) setPlayersLoading(false);
+      }
+    }
+
+    loadPlayers();
+    return () => { cancelled = true; };
+  }, []);
+
+  const visiblePlayers = useMemo(() => players, [players]);
+  const [search, setSearch] = useState("");
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [addPlayerOpen, setAddPlayerOpen] = useState(false);
+  const [playerSaving, setPlayerSaving] = useState(false);
+  const [playerFormError, setPlayerFormError] = useState("");
+  const [playerForm, setPlayerForm] = useState({
+    playerCode: "",
+    fullName: "",
+    phone: "",
+    email: "",
+    referredBy: "",
+    referralSource: "",
+    accountStatus: "UNKNOWN",
+    assignedShiftType: "",
+    notes: "",
+  });
+  const [notice, setNotice] = useState("");
+  const [selectedId, setSelectedId] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState<Status>("Call Received");
+  const [callNote, setCallNote] = useState("");
+  const [filterStatus, setFilterStatus] = useState("All statuses");
+  const [callHistory, setCallHistory] = useState<
+    { id: string; playerId: string; player: string; status: Status; time: string; note: string }[]
+  >([]);
+
+  const [followUps, setFollowUps] = useState([
+    { id: 1, player: "Jordan Lee", time: "11:30 AM", done: false },
+    { id: 2, player: "Morgan Taylor", time: "12:00 PM", done: false },
+    { id: 3, player: "Jamie Wilson", time: "02:15 PM", done: false },
+  ]);
+
+  const filteredPlayers = useMemo(() => {
+    return visiblePlayers.filter((p) => {
+      const text = `${p.name} ${p.id} ${p.platform} ${p.staff} ${p.referral} ${p.status}`.toLowerCase();
+      return text.includes(search.toLowerCase()) &&
+        (filterStatus === "All statuses" || p.status === filterStatus);
+    });
+  }, [visiblePlayers, search, filterStatus]);
+
+  const counts = useMemo(() => ({
+    total: visiblePlayers.length,
+    received: visiblePlayers.filter((p) => p.status === "Call Received").length,
+    missed: visiblePlayers.filter((p) => p.status === "Call Not Received").length,
+    followUp: visiblePlayers.filter((p) => p.status === "Follow-up Required").length,
+    uninterested: visiblePlayers.filter((p) => p.status === "Not Interested").length,
+  }), [visiblePlayers]);
+
+  function notify(message: string) {
+    setNotice(message);
+    window.setTimeout(() => setNotice(""), 3200);
+  }
+
+  function openCall(playerId?: string) {
+    const player = visiblePlayers.find((p) => p.id === (playerId ?? selectedId));
+    const id = player?.id ?? visiblePlayers[0]?.id;
+    if (!id) {
+      notify("Add a player before logging a call.");
+      return;
+    }
+    setSelectedId(id);
+    setSelectedStatus(player && statuses.includes(player.status as Status) ? player.status as Status : "Call Received");
+    setCallNote("");
+    setDialogOpen(true);
+  }
+
+  function saveCall() {
+    const player = players.find((p) => p.id === selectedId);
+    if (!player) return;
+
+    setPlayers((old) => old.map((p) => p.id === selectedId
+      ? { ...p, status: selectedStatus, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }
+      : p
+    ));
+    setCallHistory((old) => [{
+      id: `${Date.now()}`,
+      playerId: player.id,
+      player: player.name,
+      status: selectedStatus,
+      time: new Date().toLocaleString(),
+      note: callNote.trim() || "No notes added.",
+    }, ...old]);
+
+    setDialogOpen(false);
+    notify(`Call outcome updated for ${player.name}. Call history updated for this session.`);
+  }
+
+
+  async function savePlayer(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (playerSaving) return;
+
+    setPlayerSaving(true);
+    setPlayerFormError("");
+
+    try {
+      const response = await fetch("/api/players", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          ...playerForm,
+          playerCode: playerForm.playerCode.trim().toUpperCase(),
+          fullName: playerForm.fullName.trim(),
+          assignedShiftType: playerForm.assignedShiftType || undefined,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        const fieldErrors = result.details
+          ? Object.entries(result.details)
+              .map(([field, messages]) =>
+                `${field}: ${(messages as string[]).join(", ")}`
+              )
+              .join(" · ")
+          : "";
+
+        throw new Error(fieldErrors || result.error || "Unable to register player.");
+      }
+
+      // The server has saved the record. Reload the authoritative database list.
+      try {
+        const refreshResponse = await fetch("/api/players", {
+          method: "GET",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
+
+        if (refreshResponse.ok) {
+          const refreshedData = await refreshResponse.json();
+          if (Array.isArray(refreshedData.players)) {
+            const refreshedPlayers: Player[] = refreshedData.players.map(
+              (player: {
+                playerCode: string;
+                fullName: string;
+                referralSource: string | null;
+                lastContactAt: string | null;
+                assignedStaff: { id: string; name: string } | null;
+                platformAccounts: Array<{ platform: { name: string } }>;
+              }) => ({
+                id: player.playerCode,
+                name: player.fullName,
+                platform: player.platformAccounts
+                  .map((account) => account.platform.name)
+                  .join(", ") || "Not assigned",
+                referral: player.referralSource || "Not specified",
+                staff: player.assignedStaff?.name || "Unassigned",
+                status: "No call logged",
+                time: player.lastContactAt
+                  ? new Date(player.lastContactAt).toLocaleString([], {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })
+                  : "No contact yet",
+              })
+            );
+            setPlayers(refreshedPlayers);
+          }
+        }
+      } catch (refreshError) {
+        console.error("Player saved, but list refresh failed:", refreshError);
+      }
+
+      setAddPlayerOpen(false);
+      setPlayerForm({
+        playerCode: "",
+        fullName: "",
+        phone: "",
+        email: "",
+        referredBy: "",
+        referralSource: "",
+        accountStatus: "UNKNOWN",
+        assignedShiftType: "",
+        notes: "",
+      });
+      notify("Player registered successfully.");
+    } catch (error) {
+      setPlayerFormError(
+        error instanceof Error ? error.message : "Unable to register player."
+      );
+    } finally {
+      setPlayerSaving(false);
+    }
+  }
+
+  function exportCsv() {
+    const headers = ["ID", "Name", "Platform", "Referral", "Assigned Staff", "Call Status", "Last Contact"];
+    const rows = filteredPlayers.map((p) => [p.id, p.name, p.platform, p.referral, p.staff, p.status, p.time]);
+    const csv = [headers, ...rows]
+      .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "playerops-demo-players.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+    notify("CSV export downloaded.");
+  }
+
+  function goTo(label: string) {
+    setActivePage(label);
+    setMobileOpen(false);
+  }
+
+  return (
+    <div className="app-shell">
+      {mobileOpen && <button className="mobile-overlay" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
+
+      <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
+        <div className="brand">
+          <div className="brand-mark"><Headphones size={21} /></div>
+          <div><div className="brand-name">PlayerOps</div><div className="brand-caption">MANAGEMENT SUITE</div></div>
+          <button className="icon-button mobile-close" onClick={() => setMobileOpen(false)} aria-label="Close menu"><X size={18} /></button>
+        </div>
+
+        <div className="section-label">CURRENT WORKSPACE</div>
+        <div className="workspace-switch">
+          <div className="workspace-avatar">P</div>
+          <div className="workspace-text"><strong>Player Operations</strong><span>Demo workspace</span></div>
+          <ChevronDown size={15} />
+        </div>
+
+        <nav className="side-nav">
+          {(role === "Admin" ? navGroups : staffNavGroups).map((group) => (
+            <div key={group.title}>
+              <div className="section-label nav-label">{group.title}</div>
+              {group.items.map(({ label, icon: Icon }) => (
+                <button key={label} onClick={() => goTo(label)} className={`nav-item ${activePage === label ? "nav-active" : ""}`}>
+                  <Icon size={18} strokeWidth={1.8} />
+                  <span>{label}</span>
+                  {label === "Follow-ups" && <span className="nav-count">{followUps.filter((f) => !f.done).length}</span>}
+                </button>
+              ))}
+            </div>
+          ))}
+        </nav>
+
+        <div className="sidebar-bottom">
+          <div className="help-card">
+            <ShieldCheck size={19} className="help-icon" />
+            <strong>Workspace guide</strong>
+            <p>Learn how to manage player records and daily call activity.</p>
+            <button onClick={() => notify("Workspace guide will be added in a future milestone.")}>Explore guide <ArrowRight size={14} /></button>
+          </div>
+          <div className="sidebar-user">
+            <div className="user-avatar">AD</div>
+            <div className="user-details">
+            <strong>{staffName}</strong>
+            <span>{role === "Admin" ? "Administrator" : "Staff member"}</span>
+          </div>
+            <button className="icon-button" aria-label="Account options" onClick={() => goTo("Settings")}><ChevronDown size={16} /></button>
+          </div>
+        </div>
+      </aside>
+
+      <main className="main-area">
+        <header className="topbar">
+          <button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileOpen(true)}><Menu size={21} /></button>
+          <div className="breadcrumb"><span>Workspace</span><span className="slash">/</span><strong>{activePage}</strong></div>
+          <div className="top-actions">
+            <div className="role-preview" aria-label="Your assigned role">
+              <span>Role</span>
+              <strong>{role}</strong>
+            </div>
+            <label className="global-search"><Search size={16} /><input placeholder="Search players..." value={search} onChange={(e) => setSearch(e.target.value)} /></label>
+            <button className="icon-button notification-button" aria-label="Notifications" onClick={() => notify("You are all caught up.")}><Bell size={19} /><span className="notification-dot" /></button>
+            <div className="top-user"><div className="user-avatar">{role === "Admin" ? "AD" : "SC"}</div><ChevronDown size={15} /></div>
+          </div>
+        </header>
+
+        <div className="page-content">
+          <div className="welcome-row">
+            <div>
+              <div className="eyebrow"><span className="live-dot" /> PLAYER OPERATIONS</div>
+              <h1>{activePage === "Overview"
+                ? role === "Admin" ? "Good morning, Admin" : "Welcome back, Sarah"
+                : activePage}</h1>
+              <p className="subtitle">
+                {activePage === "Overview"
+                  ? "Here’s what’s happening with your players today."
+                  : `Manage and review your ${activePage.toLowerCase()} workspace.`}
+              </p>
+            </div>
+            <div className="welcome-actions">
+              <button className="button-secondary" onClick={exportCsv}><ArrowDownToLine size={16} /> Export CSV</button>
+              <button className="button-primary" onClick={() => { setPlayerFormError(""); setAddPlayerOpen(true); }}><Plus size={16} /> Add player</button>
+              <button className="button-primary" onClick={() => openCall()}><PhoneCall size={16} /> Log a call</button>
+            </div>
+          </div>
+
+          <div className="notice-banner">
+            <div className="notice-icon"><CalendarDays size={19} /></div>
+            <div className="notice-copy"><strong>Your daily overview</strong><span>Review player engagement, call activity and upcoming follow-ups.</span></div>
+            <span className="demo-pill"><span /> Database connected</span>
+          </div>
+
+          {activePage === "Overview" ? (
+            <>
+          <section className="stats-grid">
+            {[
+              { title: role === "Admin" ? "Total players" : "My assigned players", value: counts.total.toLocaleString(), foot: role === "Admin" ? "Registered players" : "Assigned to you", icon: Users, tone: "blue" },
+              { title: "Calls received", value: counts.received.toLocaleString(), foot: "Latest player status", icon: PhoneCall, tone: "green" },
+              { title: "Follow-ups required", value: counts.followUp.toLocaleString(), foot: "Need another contact", icon: CalendarDays, tone: "amber" },
+              { title: "Calls not received", value: counts.missed.toLocaleString(), foot: "Latest player status", icon: Activity, tone: "purple" },
+            ].map(({ title, value, foot, icon: Icon, tone }) => (
+              <article className="stat-card" key={title}>
+                <div className="stat-top"><span className={`stat-icon ${tone}`}><Icon size={19} /></span><span className="stat-menu">···</span></div>
+                <div className="stat-title">{title}</div><div className="stat-value">{value}</div>
+                <div className="stat-foot"><span className="foot-dot" />{foot}</div>
+              </article>
+            ))}
+          </section>
+
+          <section className="middle-grid">
+            <article className="panel engagement-panel">
+              <div className="panel-heading"><div><h2>Call activity</h2><p>Illustrative activity for the last seven days</p></div><span className="period-chip">Last 7 days <ChevronDown size={14} /></span></div>
+              <div className="chart-legend"><span><i className="legend-blue" /> Calls received</span><span><i className="legend-gray" /> Calls not received</span></div>
+              <div className="chart-area">
+                <div className="y-labels"><span>120</span><span>90</span><span>60</span><span>30</span><span>0</span></div>
+                <div className="chart-main">
+                  <div className="chart-gridlines"><i /><i /><i /><i /><i /></div>
+                  <svg className="chart-svg" viewBox="0 0 600 180" preserveAspectRatio="none" role="img" aria-label="Illustrative weekly call activity chart">
+                    <defs><linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#4779ed" stopOpacity=".2" /><stop offset="100%" stopColor="#4779ed" stopOpacity="0" /></linearGradient></defs>
+                    <path d="M0 135 C40 122 45 90 90 104 S145 130 180 86 S235 104 270 72 S320 88 355 56 S400 75 440 44 S490 65 530 30 S570 47 600 20 L600 180 L0 180 Z" fill="url(#areaFill)" />
+                    <path d="M0 135 C40 122 45 90 90 104 S145 130 180 86 S235 104 270 72 S320 88 355 56 S400 75 440 44 S490 65 530 30 S570 47 600 20" fill="none" stroke="#4779ed" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+                    <path d="M0 155 C40 147 55 161 90 142 S145 155 180 132 S235 148 270 122 S320 138 355 112 S400 127 440 105 S490 116 530 92 S570 103 600 77" fill="none" stroke="#aab5c7" strokeWidth="2" strokeDasharray="5 5" vectorEffect="non-scaling-stroke" />
+                  </svg>
+                  <div className="x-labels"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+                </div>
+              </div>
+              <div className="chart-footnote">Sample visualization · Connect real call records in the backend phase.</div>
+            </article>
+
+            <article className="panel outcome-panel">
+              <div className="panel-heading"><div><h2>Player status distribution</h2><p>Based on loaded player records</p></div></div>
+              <div className="outcome-body">
+                <div className="donut"><div className="donut-center"><strong>{counts.total}</strong><span>Players</span></div></div>
+                <div className="outcome-legend">
+                  <div><i className="o-blue" /><span>Call received</span><strong>{counts.received}</strong></div>
+                  <div><i className="o-gray" /><span>Not received</span><strong>{counts.missed}</strong></div>
+                  <div><i className="o-amber" /><span>Follow-up</span><strong>{counts.followUp}</strong></div>
+                  <div><i className="o-red" /><span>Not interested</span><strong>{counts.uninterested}</strong></div>
+                </div>
+              </div>
+              <div className="chart-footnote">Counts update when you change a player's status.</div>
+            </article>
+          </section>
+
+          <section className="panel players-panel">
+            <div className="panel-heading players-heading">
+              <div><h2>Player records</h2><p>Search and manage your player contacts</p></div>
+              <button className="text-link" onClick={() => goTo("Players")}>View players <ArrowRight size={15} /></button>
+            </div>
+            <div className="table-toolbar">
+              <label className="table-search"><Search size={16} /><input placeholder="Search name, ID, platform or staff..." value={search} onChange={(e) => setSearch(e.target.value)} /></label>
+              <select className="filter-select" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} aria-label="Filter by status">
+                <option>All statuses</option>
+                {statuses.map((s) => <option key={s}>{s}</option>)}
+              </select>
+              <button className="button-secondary small-button" onClick={exportCsv}><ArrowDownToLine size={15} /> Export</button>
+            </div>
+            <div className="table-scroll">
+              <table className="players-table">
+                <thead><tr><th>PLAYER</th><th>PLATFORM</th><th>ASSIGNED STAFF</th><th>LAST CALL STATUS</th><th>LAST CONTACT</th><th /></tr></thead>
+                <tbody>
+                  {filteredPlayers.map((p) => (
+                    <tr key={p.id}>
+                      <td><div className="player-cell"><div className="player-avatar">{p.name.split(" ").map((n) => n[0]).join("")}</div><div><strong>{p.name}</strong><span>{p.id}</span></div></div></td>
+                      <td>{p.platform}</td><td>{p.staff}</td><td><StatusBadge status={p.status} /></td>
+                      <td><span className="contact-time"><Clock3 size={13} />{p.time}</span></td>
+                      <td><button className="row-action" aria-label={`Log a call for ${p.name}`} onClick={() => openCall(p.id)}>···</button></td>
+                    </tr>
+                  ))}
+                  {filteredPlayers.length === 0 && <tr><td colSpan={6} className="empty-row">{playersLoading ? "Loading player records…" : playersError || "No players registered yet. Add a player to get started."}</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <div className="table-footer"><span>Showing <strong>{filteredPlayers.length}</strong> of <strong>{players.length}</strong> loaded players</span><span>Search and filters apply immediately</span></div>
+          </section>
+
+          <section className="panel followup-panel">
+            <div className="panel-heading"><div><h2>Today’s follow-ups</h2><p>Demo reminders for the team</p></div><button className="text-link" onClick={() => goTo("Follow-ups")}>View all <ArrowRight size={14} /></button></div>
+            <div className="followup-list">
+              {followUps.map((f) => (
+                <div className={`followup-row ${f.done ? "followup-done" : ""}`} key={f.id}>
+                  <button className="check-button" aria-label={f.done ? "Mark incomplete" : "Complete follow-up"} onClick={() => setFollowUps((old) => old.map((x) => x.id === f.id ? { ...x, done: !x.done } : x))}>{f.done && <Check size={14} />}</button>
+                  <div className="followup-person"><strong>{f.player}</strong><span>{f.done ? "Completed" : "Callback reminder"}</span></div>
+                  <span className="followup-time"><Clock3 size={14} />{f.time}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          </>
+          ) : (
+            <section className="staff-workspace" data-workspace="STAFF_WORKSPACE_V1">
+              {activePage === "Players" && (
+                <div className="panel staff-section">
+                  <div className="panel-heading">
+                    <div>
+                      <h2>My assigned players</h2>
+                      <p>Player records assigned to your workspace.</p>
+                    </div>
+                    <span className="staff-count">{filteredPlayers.length} records</span>
+                  </div>
+                  <div className="table-toolbar">
+                    <label className="table-search">
+                      <Search size={16} />
+                      <input
+                        placeholder="Search players..."
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                    </label>
+                    <select className="filter-select" value={filterStatus}
+                      onChange={(e) => setFilterStatus(e.target.value)} aria-label="Filter player status">
+                      <option>All statuses</option>
+                      {statuses.map((s) => <option key={s}>{s}</option>)}
+                    </select>
+                    <button className="button-secondary small-button" onClick={exportCsv}>
+                      <ArrowDownToLine size={15} /> Export
+                    </button>
+                  </div>
+                  <div className="table-scroll">
+                    <table className="players-table">
+                      <thead><tr><th>PLAYER</th><th>PLATFORM</th><th>STATUS</th><th>LAST CONTACT</th><th>ACTION</th></tr></thead>
+                      <tbody>
+                        {filteredPlayers.map((p) => (
+                          <tr key={p.id}>
+                            <td><div className="player-cell"><div className="player-avatar">{p.name.split(" ").map((n) => n[0]).join("")}</div><div><strong>{p.name}</strong><span>{p.id}</span></div></div></td>
+                            <td>{p.platform}</td>
+                            <td><StatusBadge status={p.status} /></td>
+                            <td><span className="contact-time"><Clock3 size={13} />{p.time}</span></td>
+                            <td><button className="button-secondary small-button" onClick={() => openCall(p.id)}><PhoneCall size={14} /> Log call</button></td>
+                          </tr>
+                        ))}
+                        {filteredPlayers.length === 0 && <tr><td colSpan={5} className="empty-row">{playersLoading ? "Loading player records…" : playersError || "No assigned players match these filters."}</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {activePage === "Call management" && (
+                <div className="panel staff-section">
+                  <div className="panel-heading">
+                    <div><h2>Call queue</h2><p>Choose an assigned player and record the contact outcome.</p></div>
+                    <span className="staff-count">{visiblePlayers.length} players</span>
+                  </div>
+                  <div className="staff-card-grid">
+                    {visiblePlayers.map((p) => (
+                      <article className="staff-feature-card" key={p.id}>
+                        <div className="staff-feature-top">
+                          <div className="player-avatar">{p.name.split(" ").map((n) => n[0]).join("")}</div>
+                          <StatusBadge status={p.status} />
+                        </div>
+                        <h3>{p.name}</h3>
+                        <p>{p.id} · {p.platform}</p>
+                        <div className="staff-card-meta"><Clock3 size={14} /> Last contact: {p.time}</div>
+                        <button className="button-primary staff-full-button" onClick={() => openCall(p.id)}>
+                          <PhoneCall size={15} /> Log call outcome
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                  {visiblePlayers.length === 0 && <p className="staff-empty">{playersLoading ? "Loading player records…" : playersError || "No assigned players are available."}</p>}
+                </div>
+              )}
+
+              {activePage === "Follow-ups" && (
+                <div className="panel staff-section">
+                  <div className="panel-heading">
+                    <div><h2>My follow-ups</h2><p>Track and complete your assigned callback reminders.</p></div>
+                    <span className="staff-count">{followUps.filter((f) => !f.done && visiblePlayers.some((p) => p.name === f.player)).length} remaining</span>
+                  </div>
+                  <div className="staff-filter-row">
+                    <span className="staff-filter-chip"><CalendarDays size={15} /> All my reminders</span>
+                    <span className="staff-filter-chip"><Check size={15} /> {followUps.filter((f) => f.done && visiblePlayers.some((p) => p.name === f.player)).length} completed</span>
+                  </div>
+                  <div className="followup-list">
+                    {followUps.filter((f) => visiblePlayers.some((p) => p.name === f.player)).map((f) => (
+                      <div className={`followup-row ${f.done ? "followup-done" : ""}`} key={f.id}>
+                        <button className="check-button" aria-label={f.done ? "Mark incomplete" : "Complete follow-up"}
+                          onClick={() => setFollowUps((old) => old.map((x) => x.id === f.id ? { ...x, done: !x.done } : x))}>
+                          {f.done && <Check size={14} />}
+                        </button>
+                        <div className="followup-person"><strong>{f.player}</strong><span>{f.done ? "Completed" : "Callback reminder"}</span></div>
+                        <span className="followup-time"><Clock3 size={14} />{f.time}</span>
+                      </div>
+                    ))}
+                    {followUps.filter((f) => visiblePlayers.some((p) => p.name === f.player)).length === 0 &&
+                      <p className="staff-empty">No follow-ups are assigned to you yet.</p>}
+                  </div>
+                </div>
+              )}
+
+              {activePage === "Call history" && (
+                <div className="panel staff-section">
+                  <div className="panel-heading">
+                    <div><h2>Call history</h2><p>Outcomes recorded during this demo session.</p></div>
+                    <span className="staff-count">{callHistory.filter((c) => visiblePlayers.some((p) => p.id === c.playerId)).length} calls</span>
+                  </div>
+                  <div className="table-scroll">
+                    <table className="players-table">
+                      <thead><tr><th>PLAYER</th><th>OUTCOME</th><th>DATE & TIME</th><th>NOTES</th></tr></thead>
+                      <tbody>
+                        {callHistory.filter((c) => visiblePlayers.some((p) => p.id === c.playerId)).map((c) => (
+                          <tr key={c.id}>
+                            <td><div className="player-cell"><div className="player-avatar">{c.player.split(" ").map((n) => n[0]).join("")}</div><div><strong>{c.player}</strong><span>{c.playerId}</span></div></div></td>
+                            <td><StatusBadge status={c.status} /></td>
+                            <td>{c.time}</td>
+                            <td className="staff-note-cell">{c.note}</td>
+                          </tr>
+                        ))}
+                        {callHistory.filter((c) => visiblePlayers.some((p) => p.id === c.playerId)).length === 0 &&
+                          <tr><td colSpan={4} className="empty-row">No calls logged yet. Open Call Management to record your first call.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {activePage === "My Profile" && (
+                <div className="staff-profile-layout">
+                  <div className="panel staff-section staff-profile-card">
+                    <div className="staff-profile-avatar">SC</div>
+                    <h2>Sarah Chen</h2>
+                    <p>Player Operations Staff</p>
+                    <span className="staff-profile-status"><i /> Demo account active</span>
+                  </div>
+                  <div className="panel staff-section">
+                    <div className="panel-heading"><div><h2>My account</h2><p>Your current workspace information.</p></div></div>
+                    <div className="staff-detail-list">
+                      <div><span>Full name</span><strong>Sarah Chen</strong></div>
+                      <div><span>Role</span><strong>Staff member</strong></div>
+                      <div><span>Workspace</span><strong>Player Operations</strong></div>
+                      <div><span>Assigned players</span><strong>{visiblePlayers.length}</strong></div>
+                      <div><span>Pending follow-ups</span><strong>{followUps.filter((f) => !f.done && visiblePlayers.some((p) => p.name === f.player)).length}</strong></div>
+                    </div>
+                    <p className="staff-profile-hint">Profile information is read-only demo data. Account editing and password changes require backend authentication.</p>
+                  </div>
+                </div>
+              )}
+
+              {!["Players", "Call management", "Follow-ups", "Call history", "My Profile"].includes(activePage) && (
+                <div className="panel staff-section">
+                  <div className="panel-heading"><div><h2>{activePage}</h2><p>This workspace section is not available for the current role.</p></div></div>
+                  <p className="staff-empty">Choose one of the Staff Workspace sections in the sidebar.</p>
+                  <button className="button-primary" onClick={() => goTo("Overview")}>Back to overview</button>
+                </div>
+              )}
+            </section>
+          )}
+
+          <footer className="page-footer"><span>© 2026 PlayerOps CMS</span><span><span className="online-dot" /> Frontend running</span><span>Prototype · Fictional data only</span></footer>
+        </div>
+      </main>
+
+      {notice && <div className="toast"><Check size={18} /><span>{notice}</span><button aria-label="Dismiss" onClick={() => setNotice("")}><X size={16} /></button></div>}
+
+
+      {addPlayerOpen && (
+        <div className="modal-backdrop" onClick={() => !playerSaving && setAddPlayerOpen(false)}>
+          <section
+            className="call-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-player-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-heading">
+              <div>
+                <h2 id="add-player-title">Register a player</h2>
+                <p>Enter the player's registration details.</p>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Close dialog"
+                disabled={playerSaving}
+                onClick={() => setAddPlayerOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={savePlayer}>
+              <label className="form-label">
+                Player code *
+                <input
+                  required
+                  maxLength={50}
+                  value={playerForm.playerCode}
+                  onChange={(event) => setPlayerForm({ ...playerForm, playerCode: event.target.value })}
+                  placeholder="e.g. PLR-1001"
+                />
+              </label>
+
+              <label className="form-label">
+                Full name *
+                <input
+                  required
+                  minLength={2}
+                  maxLength={150}
+                  value={playerForm.fullName}
+                  onChange={(event) => setPlayerForm({ ...playerForm, fullName: event.target.value })}
+                  placeholder="Player's full name"
+                />
+              </label>
+
+              <label className="form-label">
+                Phone
+                <input
+                  type="tel"
+                  maxLength={40}
+                  value={playerForm.phone}
+                  onChange={(event) => setPlayerForm({ ...playerForm, phone: event.target.value })}
+                  placeholder="Contact number"
+                />
+              </label>
+
+              <label className="form-label">
+                Email
+                <input
+                  type="email"
+                  maxLength={254}
+                  value={playerForm.email}
+                  onChange={(event) => setPlayerForm({ ...playerForm, email: event.target.value })}
+                  placeholder="player@example.com"
+                />
+              </label>
+
+              <label className="form-label">
+                Referral source
+                <input
+                  maxLength={100}
+                  value={playerForm.referralSource}
+                  onChange={(event) => setPlayerForm({ ...playerForm, referralSource: event.target.value })}
+                  placeholder="e.g. Website, friend, campaign"
+                />
+              </label>
+
+              <label className="form-label">
+                Referred by
+                <input
+                  maxLength={150}
+                  value={playerForm.referredBy}
+                  onChange={(event) => setPlayerForm({ ...playerForm, referredBy: event.target.value })}
+                  placeholder="Referrer's name or code"
+                />
+              </label>
+
+              <label className="form-label">
+                Account status
+                <select
+                  value={playerForm.accountStatus}
+                  onChange={(event) => setPlayerForm({ ...playerForm, accountStatus: event.target.value })}
+                >
+                  <option value="UNKNOWN">Unknown</option>
+                  <option value="ACTIVE">Active</option>
+                  <option value="INACTIVE">Inactive</option>
+                  <option value="SUSPENDED">Suspended</option>
+                  <option value="CLOSED">Closed</option>
+                </select>
+              </label>
+
+              <label className="form-label">
+                Assigned shift
+                <select
+                  value={playerForm.assignedShiftType}
+                  onChange={(event) => setPlayerForm({ ...playerForm, assignedShiftType: event.target.value })}
+                >
+                  <option value="">Not assigned</option>
+                  <option value="MORNING">Morning · 7 AM–11 AM</option>
+                  <option value="AFTERNOON_EVENING">Afternoon/evening · 3 PM–11 PM</option>
+                  <option value="NIGHT">Night · 11 PM–7 AM</option>
+                </select>
+              </label>
+
+              <label className="form-label">
+                Notes
+                <textarea
+                  rows={3}
+                  maxLength={2000}
+                  value={playerForm.notes}
+                  onChange={(event) => setPlayerForm({ ...playerForm, notes: event.target.value })}
+                  placeholder="Optional registration notes"
+                />
+              </label>
+
+              {playerFormError && (
+                <p role="alert" className="form-error">{playerFormError}</p>
+              )}
+
+              <div className="modal-hint">
+                <CircleHelp size={16} />
+                Last verified play time is not set by registration. Only a verified activity update should change it.
+              </div>
+
+              <div className="modal-actions">
+                <button
+                  className="button-secondary"
+                  type="button"
+                  disabled={playerSaving}
+                  onClick={() => setAddPlayerOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button className="button-primary" type="submit" disabled={playerSaving}>
+                  <Plus size={16} />
+                  {playerSaving ? "Saving…" : "Register player"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {dialogOpen && (
+        <div className="modal-backdrop" onClick={() => setDialogOpen(false)}>
+          <section className="call-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-heading"><div><h2 id="modal-title">Log a call</h2><p>Record the latest player contact outcome.</p></div><button className="icon-button" aria-label="Close dialog" onClick={() => setDialogOpen(false)}><X size={18} /></button></div>
+            <label className="form-label">Player<select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>{visiblePlayers.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.id}</option>)}</select></label>
+            <label className="form-label">Call outcome<select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value as Status)}>{statuses.map((s) => <option key={s}>{s}</option>)}</select></label>
+            <label className="form-label">Call notes<textarea value={callNote} onChange={(e) => setCallNote(e.target.value)} placeholder="Add a short note about the call..." rows={3} /></label>
+            <div className="modal-hint"><CircleHelp size={16} /> This prototype updates the player's latest status in memory. It does not yet save call history.</div>
+            <div className="modal-actions"><button className="button-secondary" onClick={() => setDialogOpen(false)}>Cancel</button><button className="button-primary" onClick={saveCall}><Check size={16} /> Save outcome</button></div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
